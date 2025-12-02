@@ -1,0 +1,242 @@
+---
+title: "HBV NA"
+output: html_document
+date: "2025-11-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+
+library(readxl)
+library(openxlsx)
+
+library(fpp3)
+
+library(cowplot)
+library(patchwork)
+library(ggtext)
+library(scales)
+
+library(ggh4x)
+
+library(viridis)
+library(pals)
+
+library(stringi)
+```
+
+```{r}
+# make df folder
+
+dir.create("../df/figure", showWarnings = TRUE, recursive = FALSE, mode = "0777")
+```
+
+```{r}
+# make df folder
+
+dir.create("../df/nuc/analysis", showWarnings = TRUE, recursive = FALSE, mode = "0777")
+```
+
+```{r}
+df_nuc_dem <- readRDS("../df/nuc/format/df_nuc_dem")
+```
+
+```{r}
+df_nuc_prf <- readRDS("../df/nuc/format/df_nuc_prf")
+```
+
+
+```{r}
+df_pop_dem <- readRDS("../rds/pop/dem/df_pop_dem")
+```
+
+```{r}
+df_pop_dem <- readRDS("../rds/pop/dem/df_pop_dem")
+```
+
+```{r}
+df_drug <- readRDS("../rds/drug/df_drug")
+```
+
+
+# modify nuc_dem
+
+```{r}
+df_nuc_dem <- df_nuc_dem %>%
+  mutate(NUC = factor(NUC, levels = c("LAM",
+                                      "ADF",
+                                      "ETV (branded)",
+                                      "ETV (generic)",
+                                      "TDF",
+                                      "TAF"))) %>%
+  rename(YEAR = "YEAR_str")
+  
+```
+
+```{r}
+df_drug_uni <- df_drug %>%
+  distinct(COST_code, DOSE, GENERIC, ORIGINAL)
+```
+
+
+
+
+```{r}
+df_drug_code <- df_nuc_dem %>%
+  distinct(DRUG_code, NUC, COST_code ) %>%
+  arrange(DRUG_code) %>%
+  left_join(df_drug_uni, by = join_by(COST_code))
+
+df_drug_code
+```
+
+
+```{r}
+df_drug_code <- df_drug_code %>%
+  mutate(Product_name = case_when(NUC == "LAM" ~ "Zefix",
+                                  NUC == "ADF" ~ "Hepsera",
+                                  NUC == "ETV (branded)" ~ "Baraclude",
+                                  NUC == "TDF" ~ "Tenozet",
+                                  NUC == "TAF" ~ "Vemlidi",
+                                  .default = "Entecavir"))
+```
+
+```{r}
+df_drug_code <- df_drug_code %>%
+  mutate(General_name = case_when(NUC == "LAM" ~ "Lamivudine",
+                                  NUC == "ADF" ~ "Adefovir dipivoxil",
+                                  NUC == "ETV (branded)" ~ "Entecavir",
+                                  NUC == "TDF" ~ "Tenofovir disoproxil fumarate",
+                                  NUC == "TAF" ~ "Tenofovir alafenamide",
+                                  .default = "Entecavir"))
+```
+
+```{r}
+df_drug_code <- df_drug_code %>%
+  mutate(Product = case_when(!is.na(ORIGINAL) ~ "branded",
+                                     !is.na(GENERIC) ~ "generic"))
+```
+
+```{r}
+df_drug_code <- df_drug_code %>%
+  mutate(DOSE = stri_trans_general(DOSE, "Fullwidth-Halfwidth")) %>%
+  mutate(Dose = str_extract(DOSE, ".+mg")) %>%
+  mutate(Dose = str_replace(Dose, "mg", " mg")) %>%
+  mutate(Formulation = str_remove(DOSE, ".+mg")) %>%
+  mutate(Formulation = str_replace(Formulation, "錠", " tablet"))
+
+df_drug_code 
+```
+
+```{r}
+df_drug_code <- df_drug_code %>%
+  mutate(Abbreviation = str_remove(NUC, "\\s.+"))
+```
+
+
+```{r}
+df_drug_code <- df_drug_code %>%
+  select(DRUG_code, COST_code, 
+         Product_name, General_name, Abbreviation,
+         Product,
+         Dose, Formulation)
+
+# save this
+
+df_drug_code %>% View()
+```
+
+```{r}
+df_drug_code <- df_drug_code %>%
+  mutate(Usage = "once daily")
+```
+
+
+```{r}
+df_drug_code %>%
+  write.xlsx("../table/TableS1.xlsx")
+```
+
+
+
+```{r}
+df_nuc_price <- df_nuc_dem %>%
+  distinct(NUC, YEAR, COST_per, .keep_all = TRUE ) %>%
+  arrange(YEAR, NUC) 
+
+df_nuc_price
+```
+
+
+```{r}
+df_nuc_etv_gen <- df_nuc_price %>% filter(NUC == "ETV (generic)")
+```
+
+```{r}
+df_nuc_etv_gen <- df_nuc_etv_gen %>%
+  arrange(YEAR, COST_per) %>%
+  group_by(YEAR) %>%
+  mutate(Price = format(COST_per, nsmall = 1)) %>%
+  mutate(Price = str_remove_all(Price, "\\s")) %>%
+  mutate(Price = str_flatten(Price, collapse = ",\n")) %>%
+  ungroup() %>%
+  distinct(YEAR, .keep_all = TRUE)
+```
+
+```{r}
+df_nuc_price %>% filter(NUC != "ETV (generic)") %>%
+  mutate(Price = format(COST_per, nsmall = 1)) 
+```
+
+
+```{r}
+df_nuc_price <- df_nuc_price %>% filter(NUC != "ETV (generic)") %>%
+  mutate(Price = format(COST_per, nsmall = 1)) %>%
+  mutate(Price = str_remove_all(Price, "\\s")) %>%
+  bind_rows(df_nuc_etv_gen)
+
+df_nuc_price
+```
+
+
+
+
+```{r}
+df_nuc_price %>% select(NUC, YEAR, Price) %>%
+  mutate(Price = format(Price, nsmall = 2)) 
+```
+
+
+```{r}
+df_nuc_price_wide <- df_nuc_price %>% select(NUC, YEAR, Price) %>%
+  pivot_wider(names_from = YEAR,
+              values_from = Price) %>%
+  mutate(Product = case_when(str_detect(NUC, "generic") ~ "generic",
+                             .default = "branded")) %>%
+  mutate(NUC = str_remove(NUC, "\\s\\(.+")) %>%
+  mutate(across(everything(), ~ replace_na(.x, "-"))) %>%
+  relocate(Product, .after = "NUC")
+
+df_nuc_price_wide
+```
+
+```{r}
+df_nuc_price_wide %>% select(any_of("2014")) %>% pull()
+```
+
+```{r}
+
+```
+
+
+```{r}
+df_nuc_price_wide %>%
+  write.xlsx("../table/TableS2.xlsx")
+```
+
+
+# end of run
