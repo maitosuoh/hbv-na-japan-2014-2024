@@ -1,0 +1,876 @@
+---
+title: "HBV NA"
+output: html_document
+date: "2025-11-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+
+library(fpp3)
+
+library(cowplot)
+library(patchwork)
+library(ggtext)
+library(scales)
+
+library(ggh4x)
+
+library(viridis)
+library(pals)
+```
+
+```{r}
+# make df folder
+
+dir.create("../df/figure", showWarnings = TRUE, recursive = FALSE, mode = "0777")
+```
+
+```{r}
+# make df folder
+
+dir.create("../df/nuc/analysis", showWarnings = TRUE, recursive = FALSE, mode = "0777")
+```
+
+```{r}
+df_nuc_dem <- readRDS("../df/nuc/format/df_nuc_dem")
+```
+
+```{r}
+df_cost_all <- readRDS("../rds/cost/df_cost_all")
+```
+
+```{r}
+df_boj <- readRDS("../rds/boj/df_boj")
+```
+
+```{r}
+df_pop_dem <- readRDS("../rds/pop/dem/df_pop_dem")
+```
+
+# modify nuc_dem
+
+```{r}
+df_nuc_dem <- df_nuc_dem %>%
+  mutate(NUC = factor(NUC, levels = c("LAM",
+                                      "ADF",
+                                      "ETV (branded)",
+                                      "ETV (generic)",
+                                      "TDF",
+                                      "TAF"))) %>%
+  rename(YEAR = "YEAR_str")
+  
+```
+
+```{r}
+df_nuc_dem <- df_nuc_dem %>%
+  mutate(AGE_ori = AGE) %>%
+    mutate(AGE = fct_recode(AGE,
+                          "0-19" = "0-4",
+                          "0-19" = "5-9",
+                          "0-19" = "10-14",
+                          "0-19" = "15-19")) 
+```
+
+```{r}
+levels_age <- df_nuc_dem %>%
+  distinct(AGE, .keep_all = TRUE) %>%
+  arrange(AGE) %>%
+  pull(AGE)
+
+levels_age 
+```
+
+```{r}
+df_nuc_dem <- df_nuc_dem %>%
+  mutate(AGE = factor(AGE, levels = levels_age))
+```
+
+```{r}
+df_nuc_dem <- df_nuc_dem %>%
+  mutate(SEX = case_when(SEX == "M" ~ "Male",
+                         SEX == "F" ~ "Female")) %>%
+  mutate(SEX = factor(SEX, levels = c("Male", "Female")))
+```
+
+# analysis
+
+```{r}
+# demogrpahics all NUC
+
+df_nuc_dem %>%
+  filter(NUC != "ADF") %>%
+  group_by(AGE, SEX, YEAR) %>%
+  summarise(SUM = sum(VALUE))
+```
+
+
+```{r}
+df_nuc_est_total <- df_nuc_dem %>%
+  filter(NUC != "ADF") %>%
+  distinct(SHEET, DRUG_name, YEAR, .keep_all = TRUE) %>%
+  group_by(YEAR) %>%
+  summarise(TOTAL = sum(TOTAL)) %>%
+  mutate(TOTAL = case_when(YEAR %in% c("2015", "2019", "2023") ~ TOTAL/366,
+                             .default = TOTAL/365))
+
+df_nuc_est_total
+```
+
+
+```{r}
+df_nuc_est_dem <-df_nuc_dem %>%
+  filter(NUC != "ADF") %>%
+  group_by(YEAR) %>%
+  summarise(VALUE = sum(VALUE)) %>%
+  mutate(VALUE = case_when(YEAR %in% c("2015", "2019", "2023") ~ VALUE/366,
+                             .default = VALUE/365))
+
+df_nuc_est_dem 
+```
+
+```{r}
+df_nuc_est_diff <- df_nuc_est_dem %>%
+  left_join(df_nuc_est_total, by = join_by(YEAR)) %>%
+  mutate(DIFF = (VALUE - TOTAL)/TOTAL *100)
+  
+```
+
+```{r}
+df_nuc_est_diff %>%
+  summarise(MAX = max(DIFF),
+            MIN = min(DIFF))
+```
+
+```{r}
+# df for trend for sex
+
+df_nuc_sex <- df_nuc_dem %>%
+  filter(NUC != "ADF") %>%
+  group_by(SEX, YEAR) %>%
+  summarise(SUM = sum(VALUE)) %>%
+  mutate(SUM = case_when(YEAR %in% c("2015", "2019", "2023") ~ SUM/366,
+                             .default = SUM/365))
+
+df_nuc_sex 
+```
+
+
+```{r}
+tsbl_nuc_sex <- df_nuc_sex %>%
+  mutate(YEAR = as.numeric(YEAR)) %>% 
+  as_tsibble(index = YEAR, key = SEX)
+```
+
+
+```{r}
+tsbl_nuc_sex %>%
+  group_by_key() %>%
+  model(tslm = TSLM(SUM ~ YEAR)) %>%
+  tidy() %>%
+  mutate(term = str_remove_all(term, "\\(|\\)")) %>%
+  mutate(term = str_to_lower(term)) %>%
+  mutate(SEX_term = paste0(SEX, "_", term))
+```
+
+
+```{r}
+label_nuc_sex <- tsbl_nuc_sex %>%
+  model(TSLM(SUM ~ YEAR)) %>%
+  glance() %>%
+   mutate(p_label = case_when(p_value <= 0.0001 ~ "*p* < 0.0001",
+                             .default = as.character(round(p_value, 3)))) %>%
+  mutate(adj_r_label = round(adj_r_squared, 2)) %>%
+  mutate(adj_r_label = as.character(adj_r_label)) %>%
+  mutate(adj_r_label = case_when(str_length(adj_r_label) == 3 ~ str_c(adj_r_label, "0"),
+                               .default = adj_r_label))
+
+label_nuc_sex
+```
+
+
+```{r}
+lm_nuc_sex <- tsbl_nuc_sex %>%
+  group_by_key() %>%
+  model(tslm = TSLM(SUM ~ YEAR)) %>%
+  tidy() %>%
+  left_join(label_nuc_sex %>% select(SEX, df.residual),
+            by = join_by(SEX)) %>%
+  mutate(term = str_remove_all(term, "\\(|\\)")) %>%
+  mutate(term = str_to_lower(term)) %>%
+  mutate(est = round(estimate, digits = 0)) %>%
+  mutate(ci_low = estimate + std.error * qt(0.025, df = df.residual),
+         ci_up = estimate + std.error * qt(1-0.025, df = df.residual)) %>%
+  mutate(ci_low_label = round(ci_low, digits = 0),
+         ci_up_label = round(ci_up, digits = 0)) %>%
+  filter(term == "year") %>%
+  mutate(across(c(est, ci_low_label, ci_up_label), ~scales::comma(.x))) %>%
+   mutate(lm_label = paste0("β<sub>1</sub> = ", est, 
+                     " [", ci_low_label,
+                     ", ", ci_up_label, "]")) 
+
+lm_nuc_sex
+```
+
+
+
+```{r}
+label_nuc_sex <- label_nuc_sex %>%
+  left_join(lm_nuc_sex, by = join_by(SEX)) %>%
+  mutate(label = str_c(lm_label, "<br>",
+                       p_label, "<br>", "*R*<sup>2</sup><sub>adj</sub> = ", adj_r_label))
+
+label_nuc_sex
+```
+
+
+```{r}
+p1_c1 <- tsbl_nuc_sex %>%
+   model(TSLM(SUM ~ YEAR)) %>%
+  augment() %>%
+  ggplot()+
+  geom_line(aes(YEAR, SUM, group = SEX, colour = SEX),
+            linewidth = 0.3)+
+  geom_point(aes(YEAR, SUM, colour = SEX),
+             size = 1)+
+    geom_line(aes(YEAR, .fitted, group = SEX),
+            colour = "#7f7f7f",
+            linewidth = 0.3, linetype = 1, alpha = 0.8)+
+  scale_colour_manual(values = c("#1f77b4", "#d62728"),
+                      name = "Sex")+
+  geom_richtext(data = tsbl_nuc_sex %>%
+                  filter(YEAR %in% c(2014, 2023)) %>% 
+                  mutate(label = scales::comma(round(SUM))) %>%
+                  mutate(hjust = case_when(YEAR %in% c(2014) ~ 0,
+                                           YEAR == 2023 ~ 0.5)) %>%
+                  mutate(vjust = case_when(SEX == "Male" ~ 1,
+                                           SEX == "Female" ~ 1)) %>%
+                  mutate(y = case_when(SEX =="Male" ~ SUM - 80000/25,
+                                       SEX == "Female" ~ SUM - 80000/25)),
+                aes(x = YEAR, y = y, label = label,
+                    hjust = hjust,
+                    vjust = vjust),
+                size = 2.8, colour = "black",
+                fill = NA,
+                label.color = NA, 
+                label.padding = grid::unit(rep(0, 4), "pt"),
+                inherit.aes = FALSE)+
+    geom_richtext(data = label_nuc_sex %>%
+                    mutate(label = str_remove(label, "\\s\\[[^\\]]+\\]")) %>%
+                  mutate(x = case_when(SEX =="Male" ~ 2014,
+                                       SEX == "Female" ~ 2017)) %>%
+                  mutate(vjust = case_when(SEX == "Male" ~ 0,
+                                           SEX == "Female" ~ 1)) %>%
+                  mutate(y = case_when(SEX =="Male" ~ 62500,
+                                       SEX == "Female" ~ 35000)) %>%
+                  mutate(hjust = 0),
+                aes(x = x, y = y, label = label, hjust = hjust, vjust = vjust),
+                size = 2.8, colour = "black",
+                fill = NA,
+                label.color = NA, 
+                label.padding = grid::unit(rep(0, 4), "pt"),
+                inherit.aes = FALSE)+
+  scale_y_continuous(breaks = seq(0, 80000, 20000),
+                     limits = c(0, 80000),
+                     labels = label_comma())+
+  coord_cartesian(clip = "off")+
+  labs(tag = "c",
+       x = "Year",
+       y = "People on NAs (n)")+
+  theme_classic()+
+  theme(plot.tag = element_text(size = 12, colour = "black", face = "bold"),
+        axis.title.x = element_text(size = 8, colour = "black", face = "bold", margin = margin(0, 0, 0, 0, "mm")),
+        axis.title.y = element_text(size = 8, colour = "black", face = "bold"),
+        axis.text = element_text(size = 8, colour = "black"),
+        axis.line = element_line(linewidth = 0.3, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8, colour = "black"),
+        legend.position = "inside",
+        legend.position.inside = c(1, 0),
+        legend.justification.inside = c(1, 0),
+        legend.background = element_blank(),
+        plot.margin = margin(0,5,0,0, "mm"),
+        legend.margin = margin(0, 0, 0, 0, "mm"),
+        legend.key.height = unit(5, "mm"),
+        legend.spacing.y = unit(0, "mm"),
+        legend.key = element_rect(fill = "transparent"))
+
+p1_c1
+```
+
+
+#adjust for pop
+
+```{r}
+df_pop_dem_sa <- df_pop_dem %>%
+  filter(AGE == "total") %>%
+  rename(Male = "ALL_m",
+         Female = "ALL_f") %>%
+  pivot_longer(cols = c(Male, Female),
+               names_to = "SEX",
+               values_to = "POP") %>%
+  mutate(SEX = factor(SEX, levels = c("Male", "Female")))
+
+
+df_pop_dem_sa 
+```
+
+
+```{r}
+tsbl_nuc_sex_pct <- tsbl_nuc_sex %>%
+  mutate(ID = paste0(YEAR, "_", SEX)) %>%
+  left_join(df_pop_dem_sa %>%
+              mutate(ID = paste0(YEAR, "_", SEX)) %>%
+              select(ID, POP),
+            join_by(ID)) %>%
+  mutate(PCT = SUM/(POP*1000) *100)
+```
+
+```{r}
+label_nuc_sex_pct <- tsbl_nuc_sex_pct %>%
+  model(tslm = TSLM(PCT ~ YEAR)) %>%
+  glance() %>%
+  mutate(p_label = case_when(p_value <= 0.0001 ~ "*p* < 0.0001",
+                             .default = as.character(round(p_value, 3)))) %>%
+  mutate(adj_r_label = round(adj_r_squared,2)) %>%
+  mutate(adj_r_label = as.character(adj_r_label)) %>%
+  mutate(adj_r_label = case_when(str_length(adj_r_label) == 3 ~ str_c(adj_r_label, "0"),
+                               .default = adj_r_label))
+label_nuc_sex_pct
+```
+
+
+```{r}
+lm_nuc_sex_pct <- tsbl_nuc_sex_pct %>%
+  group_by_key() %>%
+  model(tslm = TSLM(PCT ~ YEAR)) %>%
+  tidy() %>%
+  left_join(label_nuc_sex_pct %>% select(SEX, df.residual),
+            by = join_by(SEX)) %>%
+  mutate(term = str_remove_all(term, "\\(|\\)")) %>%
+  mutate(term = str_to_lower(term)) %>%
+    mutate(est = round(estimate, digits = 4)) %>%
+    mutate(ci_low = estimate + std.error * qt(0.025, df = df.residual),
+         ci_up = estimate + std.error * qt(1-0.025, df = df.residual)) %>%
+  mutate(ci_low_label = round(ci_low, digits = 4),
+         ci_up_label = round(ci_up, digits = 4)) %>%
+  mutate(ci_low_label = as.character(ci_low_label),
+         ci_up_label = as.character(ci_up_label)) %>%
+  mutate(ci_up_label = case_when(str_length(ci_up_label) == 5 ~ paste0(ci_up_label, "0"),
+                                 .default = ci_up_label)) %>%
+  filter(term == "year") %>%
+   mutate(lm_label = paste0("β<sub>1</sub> = ", est, 
+                     " [", ci_low_label,
+                     ", ", ci_up_label, "]")) 
+
+lm_nuc_sex_pct
+```
+
+```{r}
+label_nuc_sex_pct <- label_nuc_sex_pct %>%
+  left_join(lm_nuc_sex_pct %>% select(SEX, lm_label),
+         by = join_by(SEX)) %>%
+  mutate(label = str_c(lm_label, "<br>",
+                       p_label, "<br>", "*R*<sup>2</sup><sub>adj</sub> = ", adj_r_label))
+
+label_nuc_sex_pct
+```
+
+
+```{r}
+p1_c2 <- tsbl_nuc_sex_pct %>%
+   model(TSLM(PCT ~ YEAR)) %>%
+  augment() %>%
+  ggplot()+
+  geom_line(aes(YEAR, PCT, group = SEX, colour = SEX),
+            linewidth = 0.3)+
+  geom_point(aes(YEAR, PCT, colour = SEX),
+             size = 1) +
+    geom_line(aes(YEAR, .fitted, group = SEX),
+            colour = "#7f7f7f",
+            linewidth = 0.3, linetype = 1, alpha = 0.8)+
+    scale_colour_manual(values = c("#1f77b4", "#d62728"),
+                        name = "Sex")+
+   geom_text(data = tsbl_nuc_sex_pct %>%
+                  filter(YEAR %in% c(2014, 2023)) %>% 
+                  mutate(label = case_when(PCT > 0.1 ~ round(PCT, digits = 3),
+                                           .default =  round(PCT, digits = 3))) %>%
+                  mutate(hjust = case_when(YEAR == c(2014) ~ 0,
+                                           YEAR == 2023 ~ 0.5)) %>%
+                  mutate(vjust = case_when(SEX == "Male" ~ 1,
+                                           SEX == "Female" ~ 1)) %>%
+                  mutate(y = case_when(SEX =="Male" ~ PCT - 0.15/25,
+                                       SEX == "Female" ~ PCT - 0.15/25)),
+                aes(x = YEAR, y = y, label = label,
+                    hjust = hjust,
+                    vjust = vjust),
+                size = 2.8, colour = "black",
+                inherit.aes = FALSE)+
+    geom_richtext(data = label_nuc_sex_pct %>%
+                     mutate(label = str_remove(label, "\\s\\[[^\\]]+\\]")) %>%
+                  mutate(x = case_when(SEX =="Male" ~ 2014,
+                                       SEX == "Female" ~ 2017)) %>%
+                  mutate(vjust = case_when(SEX == "Male" ~ 0,
+                                           SEX == "Female" ~ 1)) %>%
+                  mutate(y = case_when(SEX =="Male" ~ 0.10,
+                                       SEX == "Female" ~ 0.055)) %>%
+                  mutate(hjust = 0),
+                aes(x = x, y = y, label = label, hjust = hjust, vjust = vjust),
+                size = 2.8, colour = "black",
+                fill = NA,
+                label.color = NA, 
+                label.padding = grid::unit(rep(0, 4), "pt"),
+                inherit.aes = FALSE)+
+  scale_y_continuous(breaks = seq(0, 0.15, 0.05),
+                     limits = c(0, 0.15))+
+  theme_classic()+
+    coord_cartesian(clip = "off")+
+  labs(x = "Year",
+       y = "Prevalence (%)")+
+  theme_classic()+
+  theme(axis.title.x = element_text(size = 8, colour = "black", face = "bold", margin = margin(0, 0, 0, 0, "mm")),
+        axis.title.y = element_text(size = 8, colour = "black", face = "bold"),
+        
+        axis.text = element_text(size = 8, colour = "black"),
+        axis.line = element_line(linewidth = 0.3, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+        legend.position = "none",
+        legend.title = element_text(size = 8, colour = "black", face = "bold"),
+        legend.text = element_text(size = 8, colour = "black"),
+        plot.margin = margin(0,5,0,0, "mm"))
+
+p1_c2
+```
+
+
+```{r}
+df_nuc_dem %>%
+  filter(NUC != "ADF") %>%
+  group_by(AGE, SEX, NUC, YEAR) %>%
+  summarise(SUM = sum(VALUE)) %>%
+  ungroup() %>%
+  group_by(AGE, SEX, YEAR) %>%
+  mutate(VALUE = case_when(YEAR %in% c("2015", "2019", "2023") ~ SUM/366,
+                             .default = SUM/365)) %>%
+  ggplot(aes(AGE, SUM))+
+  geom_col()+
+  facet_grid(rows = vars(YEAR),
+               cols = vars(SEX))+
+  theme_classic()+
+  theme(plot.tag = element_text(size = 12, colour = "black", face = "bold"),,
+        axis.title = element_markdown(size = 8, colour = "black", face = "bold"),
+        axis.text.x = element_text(size = 8, colour = "black",
+                                   angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 8, colour = "black"),
+        axis.line = element_line(linewidth = 0.3, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+        legend.title = element_text(size = 8, colour = "black", face = "bold"),
+        legend.text = element_text(size = 8, colour = "black"),
+        plot.margin = margin(0,5,0,0, "mm"))
+```
+
+
+```{r}
+df_nuc_dem_n <- df_nuc_dem %>%
+  filter(NUC != "ADF") %>%
+  group_by(AGE, SEX, YEAR) %>%
+  summarise(SUM = sum(VALUE)) %>%
+  mutate( SUM = case_when(YEAR %in% c("2015", "2019", "2023") ~ SUM/366,
+                             .default = SUM/365))
+```
+
+```{r}
+df_nuc_dem_n <- df_nuc_dem %>%
+  filter(NUC != "ADF") %>%
+  group_by(AGE, YEAR) %>%
+  summarise(SUM = sum(VALUE)) %>%
+  mutate( SUM = case_when(YEAR %in% c("2016", "2020", "2023") ~ SUM/366,
+                             .default = SUM/365)) %>%
+  mutate(SEX = "Total") %>%
+  bind_rows(df_nuc_dem_n)
+```
+
+```{r}
+df_nuc_dem_n <- df_nuc_dem_n %>%
+  mutate(SEX = factor(SEX, levels = c("Total", "Male" ,"Female")))
+```
+
+```{r}
+p1_d_dum <- df_nuc_dem_n %>%
+  filter(SEX == "Total") %>%
+  ggplot(aes(AGE, SUM, group = YEAR, colour = YEAR)) +
+  geom_line(linewidth = 0.3)+
+  scale_colour_manual(values = as.vector(pals::kovesi.rainbow(n = 10)),
+                      name = "Year")+
+  scale_y_continuous(breaks = seq(0, 25000, 5000),
+                     limits = c(0, 25000),
+                     labels = label_comma())+
+  annotate(geom = "text",
+           x = 8.5,
+           y = 25000,
+           label = "Total",
+           size = 2.8,
+           colour ="black",
+           fontface = "bold")+
+  labs(tag = "b",
+       x = "Age",
+       y = "People on NAs (n)")+
+  guides(colour = guide_legend(nrow = 1,
+                               title.position = "left",
+                               override.aes = list(linewidth = 0.5)))+
+  theme_classic()+
+  theme(plot.tag = element_text(size = 12, colour = "black", face = "bold"),
+        axis.title = element_text(size = 8, colour = "black", face = "bold"),
+        axis.text.x = element_text(size = 8, colour = "black",
+                                   angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 8, colour = "black"),
+        axis.line = element_line(linewidth = 0.3, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+        legend.position = "right",
+        legend.title = element_text(size = 8, colour = "black", face = "bold", hjust = 0.5),
+        legend.text = element_text(size = 8, colour = "black"),
+        legend.margin = margin(0, 0, 0, 0, unit = "mm"),
+      #  panel.spacing.y = unit(5, "mm"),
+        plot.margin = margin(0,0,0,0, "mm"),
+      legend.box.margin = margin(0,0, 0, 0, "mm"))
+
+p1_d_dum
+```
+
+
+```{r}
+p1_d_leg <- get_legend(p1_d_dum)
+
+p1_d_leg <- wrap_elements(p1_d_leg)
+
+p1_d_leg 
+```
+
+```{r}
+#p1_c1 <- 
+df_nuc_dem_n %>%
+  filter(SEX == "Male") %>%
+  ggplot(aes(AGE, SUM, group = YEAR, colour = YEAR)) +
+  geom_line(linewidth = 0.3)+
+  scale_colour_manual(values = as.vector(pals::kovesi.rainbow(n = 10)),
+                      name = "Year")+
+  scale_y_continuous(breaks = seq(0, 12000, 3000),
+                     limits = c(0, 12000),
+                     labels = label_comma())+
+  annotate(geom = "text",
+           x = 8.5,
+           y = 12000,
+           label = "Male",
+           size = 2.8,
+           colour ="black",
+           fontface = "bold")+
+  labs(
+       x = "Age",
+       y = "People on NAs (n)")+
+  guides(colour = guide_legend(nrow = 2, byrow = TRUE,
+                               title.position = "left",
+                               override.aes = list(linewidth = 0.5)))+
+  theme_classic()+
+  theme(#plot.tag = element_text(size = 12, colour = "black", face = "bold"),
+        axis.title.x = element_text(size = 8, colour = "black", face = "bold"),
+        
+        axis.title.y = element_text(size = 8, colour = "black", face = "bold"),
+        axis.text.y = element_text(size = 8, colour = "black"),
+        axis.text.x = element_text(size = 8, colour = "black",
+                                   angle = 90, hjust = 1, vjust = 0.5),
+        
+        axis.line = element_line(linewidth = 0.3, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+        legend.position = "none",
+        legend.title = element_text(size = 8, colour = "black", face = "bold", hjust = 0.5),
+        legend.text = element_text(size = 8, colour = "black"),
+        legend.margin = margin(0, 0, 0, 0, unit = "mm"),
+      #  panel.spacing.y = unit(5, "mm"),
+        plot.margin = margin(0,0,0,0, "mm"))
+
+#p1_c1 
+```
+
+
+
+```{r}
+#p1_c2 <- 
+df_nuc_dem_n %>%
+  filter(SEX == "Female") %>%
+  ggplot(aes(AGE, SUM, group = YEAR, colour = YEAR)) +
+  geom_line(linewidth = 0.3)+
+  scale_colour_manual(values = as.vector(pals::kovesi.rainbow(n = 10)),
+                      name = "Year")+
+  scale_y_continuous(breaks = seq(0, 12000, 3000),
+                     limits = c(0, 12000),
+                     labels = label_comma())+
+    annotate(geom = "text",
+           x = 8.5,
+           y = 12000,
+           label = "Female",
+           size = 2.8,
+           colour ="black",
+           fontface = "bold")+
+  labs(
+       x = "Age",
+       y = "People on NAs (n)")+
+  guides(colour = guide_legend(nrow = 2, byrow = TRUE,
+                               title.position = "top",
+                               override.aes = list(linewidth = 0.5)))+
+  theme_classic()+
+  theme(
+        axis.title.x = element_text(size = 8, colour = "black", face = "bold", margin = margin(0,0,0,0, "mm")),
+    axis.title.y = element_text(size = 8, colour = "black", face = "bold"),
+        axis.text.x = element_text(size = 8, colour = "black",
+                                   angle = 90, hjust = 1, vjust = 0.5, margin = margin(0,0,0,0, "mm")),
+        axis.text.y = element_text(size = 8, colour = "black"),
+        axis.line = element_line(linewidth = 0.3, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+        legend.position = "none",
+        legend.title = element_text(size = 8, colour = "black", face = "bold", hjust = 0.5),
+        legend.text = element_text(size = 8, colour = "black"),
+        plot.margin = margin(0,0,0,0, "mm"))
+
+#p1_c2
+```
+
+
+```{r}
+df_nuc_dem_pct <- df_nuc_dem_n %>%
+  group_by(YEAR, SEX) %>%
+  mutate(ALL = sum(SUM)) %>%
+  ungroup() %>%
+  mutate(PCT = SUM/ALL*100) 
+
+df_nuc_dem_pct
+```
+
+```{r}
+# proportion
+
+#p1_c1 <- 
+df_nuc_dem_pct %>%
+  filter(SEX == "Total") %>%
+  ggplot(aes(AGE, PCT, group = YEAR, colour = YEAR)) +
+  geom_line(linewidth = 0.3)+
+  scale_colour_manual(values = as.vector(pals::kovesi.rainbow(n = 10)),
+                      name = "Year")+
+    scale_y_continuous(limits = c(0, 25),
+                     breaks = seq(0, 25, 5))+
+    annotate(geom = "text",
+           x = 8.5,
+           y = 25,
+           label = "Total",
+           size = 2.8,
+           colour ="black",
+           fontface = "bold")+
+  labs(tag = "c",
+       x = "Age",
+       y = "Proportion (%)")+
+  guides(colour = guide_legend(nrow = 2, byrow = TRUE,
+                               title.position = "top",
+                               override.aes = list(linewidth = 0.5)))+
+  theme_classic()+
+  theme(plot.tag = element_text(size = 12, colour = "black", face = "bold"),
+        axis.title.x = element_text(size = 8, colour = "black", face = "bold"),
+        axis.title.y = element_text(size = 8, colour = "black", face = "bold"),
+        
+        axis.text.x = element_text(size = 8, colour = "black",
+                                   angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 8, colour = "black"),
+        axis.line = element_line(linewidth = 0.3, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+        legend.position = "none",
+        legend.title = element_text(size = 8, colour = "black", face = "bold", hjust = 0.5),
+        legend.text = element_text(size = 8, colour = "black"),
+      #  panel.spacing.y = unit(5, "mm"),
+        plot.margin = margin(0,0,0,0, "mm"))
+
+#p1_d1
+```
+
+
+
+
+```{r}
+# proportion
+
+p1_d1 <- df_nuc_dem_pct %>%
+  filter(SEX == "Male") %>%
+  ggplot(aes(AGE, PCT, group = YEAR, colour = YEAR)) +
+  geom_line(linewidth = 0.3)+
+  scale_colour_manual(values = as.vector(pals::kovesi.rainbow(n = 10)),
+                      name = "Year")+
+    scale_y_continuous(limits = c(0, 25),
+                     breaks = seq(0, 25, 5))+
+    annotate(geom = "text",
+           x = 8.5,
+           y = 25,
+           label = "Male",
+           size = 2.8,
+           colour ="black",
+           fontface = "bold")+
+  labs(tag = "d",
+       x = "Age",
+       y = "Proportion (%)")+
+  guides(colour = guide_legend(nrow = 1, 
+                              # title.position = "left",
+                               override.aes = list(linewidth = 0.5)))+
+  theme_classic()+
+  theme(plot.tag = element_text(size = 12, colour = "black", face = "bold"),
+        axis.title.x = element_text(size = 8, colour = "black", face = "bold"),
+        axis.title.y = element_text(size = 8, colour = "black", face = "bold"),
+        axis.text.y = element_text(size = 8, colour = "black"),
+        axis.text.x = element_text(size = 8, colour = "black",
+                                   angle = 90, hjust = 1, vjust = 0.5),
+        axis.line = element_line(linewidth = 0.3, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+        legend.position = "bottom",
+        legend.location = "plot",
+        legend.justification = c(0, 0.5),
+        legend.title = element_text(size = 8, colour = "black", face = "bold", hjust = 0),
+        legend.text = element_text(size = 8, colour = "black"),
+        plot.margin = margin(0,0,0,0, "mm"),
+        legend.margin = margin(0, 0, 0, 0, "mm"),
+        legend.box.margin = margin(0, 0, 0, 0, "mm"),
+        legend.box.spacing = unit(0, "mm"),
+        legend.key.height = unit(5, "mm"))
+
+p1_d1
+```
+
+
+
+
+```{r}
+p1_d2 <- df_nuc_dem_pct %>%
+  filter(SEX == "Female") %>%
+  ggplot(aes(AGE, PCT, group = YEAR, colour = YEAR)) +
+  geom_line(linewidth = 0.3)+
+  scale_colour_manual(values = as.vector(pals::kovesi.rainbow(n = 10)),
+                      name = "Year")+
+  scale_y_continuous(limits = c(0, 25),
+                     breaks = seq(0, 25, 5))+
+      annotate(geom = "text",
+           x = 8.5,
+           y = 25,
+           label = "Female",
+           size = 2.8,
+           colour ="black",
+           fontface = "bold")+
+  labs(
+       x = "Age",
+       y = "Proportion (%)")+
+  guides(colour = guide_legend(nrow = 2, byrow = TRUE,
+                               title.position = "top",
+                               override.aes = list(linewidth = 0.5)))+
+  theme_classic()+
+  theme(#plot.tag = element_text(size = 12, colour = "black", face = "bold"),
+        axis.title.x = element_text(size = 8, colour = "black", face = "bold"),
+        axis.title.y = element_text(size = 8, colour = "black", face = "bold"),
+        axis.text.y = element_text(size = 8, colour = "black"),
+        axis.text.x = element_text(size = 8, colour = "black",
+                                   angle = 90, hjust = 1, vjust = 0.5),
+        axis.line = element_line(linewidth = 0.3, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+        legend.position = "none",
+        legend.title = element_text(size = 8, colour = "black", face = "bold", hjust = 0.5),
+        legend.text = element_text(size = 8, colour = "black"),
+        plot.margin = margin(0,0,0,0, "mm"))
+
+p1_d2
+```
+
+```{r}
+pals::kovesi.rainbow(n = 10)[4:10]
+```
+
+
+```{r}
+saveRDS(p1_c1, "../plot/p1_c1.RDS")
+saveRDS(p1_c2, "../plot/p1_c2.RDS")
+
+saveRDS(p1_d1, "../plot/p1_d1.RDS")
+saveRDS(p1_d2, "../plot/p1_d2.RDS")
+
+saveRDS(p1_d_leg, "../plot/p1_d_leg.RDS")
+```
+
+
+
+```{r}
+df_nuc_dem %>%
+  filter(!NUC %in% c("ADF")) %>%
+    mutate(NUC = fct_recode(NUC,
+                          ETV = "ETV (branded)",
+                          ETV = "ETV (generic)")) %>%
+  complete(YEAR, NUC, fill = list(VALUE = 0)) 
+```
+
+
+
+```{r}
+print(58.555878 + 41.444122)
+```
+
+
+```{r}
+p2 <- df_nuc_dem %>%
+  # filter(!NUC %in% c("ADF")) %>%
+    mutate(NUC = fct_recode(NUC,
+                          ETV = "ETV (branded)",
+                          ETV = "ETV (generic)")) %>%
+  group_by(AGE, SEX, YEAR, NUC) %>%
+  summarise(SUM = sum(VALUE)/365) %>%
+  ungroup() %>%
+  group_by(SEX, YEAR, AGE) %>%
+  mutate(PCT = prop.table(SUM)*100) %>%
+  ungroup() %>%
+  ggplot(aes(AGE, PCT , fill = NUC))+
+  geom_col(width = 0.6)+
+  scale_fill_manual(values = c("#e377c2" , "#8c564b", "#17becf", "#ff7f0e", "#d62728"),
+                    name = "NA")+
+  scale_y_continuous(expand = c(0, 0),
+                     breaks = seq(0, 100, 50))+
+  facet_grid2(rows = vars(YEAR), cols = vars(SEX),
+              axes = "y",
+              remove_labels = "x"
+              )+
+  guides(fill = guide_legend(title.position = "left",
+                             override.aes = list(size = 2)))+
+  labs(y = "Proportion (%)",
+       x = "Age")+
+  theme_classic()+
+  theme(strip.background = element_blank(),
+        panel.spacing = unit(5, "mm"),
+        strip.text.x = element_text(size = 8, colour = "black", face = "bold" ),
+        strip.text.y = element_text(size = 8, colour = "black", face = "bold" , angle = 0),
+        axis.title = element_text(size = 8, colour = "black", face = "bold"),
+        axis.text.x = element_text(size = 8, colour = "black",
+                                   angle = 90, hjust = 1, vjust = 0.5),
+        axis.text.y = element_text(size = 8, colour = "black"),
+        axis.line = element_line(linewidth = 0.3, colour = "black"),
+        axis.ticks = element_line(linewidth = 0.3, colour = "black"),
+        legend.position = "bottom",
+        legend.title = element_text(size = 8, colour = "black", face = "bold", hjust = 0.5),
+        legend.text = element_text(size = 8, colour = "black"),
+        legend.key.size = unit(4, 'mm'),
+        plot.margin = margin(0,0,0,0, "mm"),
+        legend.margin = margin(0,0,0,0, "mm"))
+
+p2
+```
+
+```{r}
+p2 <- p2+plot_layout()&
+  theme(legend.box.spacing = unit(3, "mm"))
+
+ggsave("../figure/Fig3.pdf",p2,  width = 175, height = 235, units = "mm")
+```
+
+
