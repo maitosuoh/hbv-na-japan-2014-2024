@@ -1,0 +1,87 @@
+---
+title: "HBV NA"
+output: html_document
+date: "2025-11-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+
+library(fpp3)
+
+library(cowplot)
+library(patchwork)
+library(ggtext)
+library(scales)
+
+library(ggh4x)
+
+library(viridis)
+library(pals)
+```
+
+```{r}
+plot_name <- list.files("../plot", pattern = "p1_") %>%
+  str_remove("\\.RDS")
+
+plot_name 
+
+path_name <- paste0("../plot/", plot_name, ".RDS")
+
+path_name 
+```
+```{r}
+for (i in 1:length(plot_name)){
+  assign(plot_name[i], readRDS(path_name[i]))
+}
+```
+
+```{r}
+p1_a1 <- p1_a1
+
+p1_a2 <- p1_a2 + theme(legend.position = "none")
+```
+
+```{r}
+p1 <- free(p1_a1, side = "l", type = "label") + 
+  free(p1_a2, side = "l", type = "label") +
+  free(p1_b1, side = "l", type = "label") + 
+  free(p1_b2, side = "l", type = "label") + 
+  free(p1_c1, side = "l", type = "label") + 
+  free(p1_c2, side = "l", type = "label") + 
+  free(p1_d1, side = "l", type = "label") + 
+  free(p1_d2, side = "l", type = "label") + 
+  plot_layout(design = "
+              AB
+              AB
+              AB
+              AB
+              AB
+              AB
+              CD
+              CD
+              CD
+              CD
+              EF
+              EF
+              EF
+              EF
+              GH
+              GH
+              GH
+              GH
+              ") # &
+#  theme(axis.title.x = element_text(size = 8, colour = "black", face = "bold",
+#                                    margin = margin(2.75, 0, 0, 0, "pt")),
+#        axis.text.x = element_text(size = 8, colour = "black",
+#                                       margin = margin(2.2, 0, 0, 0, "pt")))
+
+ggsave("../figure/Fig1.pdf", p1,
+       width = 174, height = 234, units = "mm",
+       device = cairo_pdf)
+```
+
